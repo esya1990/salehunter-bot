@@ -1,6 +1,4 @@
 import asyncio
-import os
-
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
@@ -8,33 +6,23 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from aiogram import web, Router
+import os
+import json
 
 API_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_PATH = f"/webhook"
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") or "supersecret"
-WEBAPP_HOST = "0.0.0.0"
-WEBAPP_PORT = int(os.getenv("PORT", 3000))
+
+# Подключение к Google Sheets
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+GOOGLE_CREDENTIALS = json.loads(GOOGLE_CREDENTIALS_JSON)
+
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_CREDENTIALS, scope)
+gc = gspread.authorize(credentials)
+spreadsheet_id = os.getenv("SPREADSHEET_ID")
+sheet = gc.open_by_key(spreadsheet_id).sheet1
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-router = Router()
-dp.include_router(router)
-
-# Подключение к Google Sheets
-CREDENTIALS_CONTENT = os.getenv("GOOGLE_CREDENTIALS_JSON")
-CREDENTIALS_FILE = "credentials.json"
-
-# Записываем ключ в файл если его нет
-if CREDENTIALS_CONTENT and not os.path.exists(CREDENTIALS_FILE):
-    with open(CREDENTIALS_FILE, "w") as f:
-        f.write(CREDENTIALS_CONTENT)
-
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-gc = gspread.authorize(credentials)
-spreadsheet_id = '1nPcx56Y0FQ0Y0754BPuUp2i_zSjb1KW1N586PhsCNVY'
-sheet = gc.open_by_key(spreadsheet_id).sheet1
 
 # Временная база пользователей
 users_db = {}
@@ -74,6 +62,7 @@ categories_menu = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")]
 ])
 
+# Обработчик команды /start
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -83,40 +72,46 @@ async def cmd_start(message: types.Message):
             'trial_start': datetime.now(),
             'trial_end': datetime.now() + timedelta(days=3)
         }
-    await message.answer(
-        "👋 Добро пожаловать в SaleHunterKz!",
-        reply_markup=main_menu
-    )
+        await message.answer(
+            "👋 Добро пожаловать в SaleHunterKz!\n\n"
+            "🎉 3 дня бесплатного премиум-доступа активированы!",
+            reply_markup=main_menu
+        )
+    else:
+        await message.answer("Вы в главном меню:", reply_markup=main_menu)
 
+# Обработчик кнопок главного меню
 @dp.message()
 async def menu_handler(message: types.Message):
-    if message.text == "🛍 Найти товар со скидкой":
+    text = message.text
+    if text == "🛍 Найти товар со скидкой":
         records = sheet.get_all_records()
         if records:
             for record in records:
-                text = (
+                await message.answer(
                     f"📦 {record['Название товара']}\n"
                     f"🏷 Категория: {record['Категория']}\n"
                     f"💰 Старая цена: {record['Старая цена']}\n"
                     f"🔥 Новая цена: {record['Новая цена']}\n"
-                    f"🌟 Скидка: {record['Скидка (%)']}\n"
+                    f"🎯 Скидка: {record['Скидка (%)']}\n"
                     f"🔗 [Перейти к товару]({record['Ссылка на товар']})\n"
-                    f"📝 {record['Описание скидки']}"
+                    f"📝 {record['Описание скидки']}",
+                    parse_mode="Markdown"
                 )
-                await message.answer(text, parse_mode="Markdown")
-        else:
-            await message.answer("😔 Пока нет скидок в базе.")
-    elif message.text == "📂 Категории товаров":
+    elif text == "📂 Категории товаров":
         await message.answer("Выберите категорию:", reply_markup=categories_menu)
 
+# Обработчик inline-кнопок категорий
 @dp.callback_query()
-async def handle_callbacks(callback: types.CallbackQuery):
+async def callback_handler(callback: types.CallbackQuery):
     data = callback.data
 
     if data == "back_to_main":
-        await callback.message.answer("Вы вернулись в главное меню:", reply_markup=main_menu)
+        await callback.message.answer("Вы в главном меню:", reply_markup=main_menu)
+        await callback.answer()
+
     elif data.startswith("cat_"):
-        selected_category = {
+        category_map = {
             "cat_phones": "Смартфоны и гаджеты",
             "cat_clothes": "Одежда и обувь",
             "cat_electronics": "Электроника",
@@ -126,48 +121,33 @@ async def handle_callbacks(callback: types.CallbackQuery):
             "cat_sport": "Спорт и отдых",
             "cat_beauty": "Красота и здоровье",
             "cat_games": "Игры и консоли",
-            "cat_auto": "Авто и мото"
-        }.get(data)
-
+            "cat_auto": "Авто и мото",
+        }
+        selected_category = category_map.get(data)
         if selected_category:
             records = sheet.get_all_records()
             found = False
             for record in records:
                 if record['Категория'] == selected_category:
-                    text = (
+                    await callback.message.answer(
                         f"📦 {record['Название товара']}\n"
                         f"🏷 Категория: {record['Категория']}\n"
                         f"💰 Старая цена: {record['Старая цена']}\n"
                         f"🔥 Новая цена: {record['Новая цена']}\n"
-                        f"🌟 Скидка: {record['Скидка (%)']}\n"
+                        f"🎯 Скидка: {record['Скидка (%)']}\n"
                         f"🔗 [Перейти к товару]({record['Ссылка на товар']})\n"
-                        f"📝 {record['Описание скидки']}"
+                        f"📝 {record['Описание скидки']}",
+                        parse_mode="Markdown"
                     )
-                    await callback.message.answer(text, parse_mode="Markdown")
                     found = True
             if not found:
-                await callback.message.answer(f"😔 Пока нет товаров в категории {selected_category}.")
-        else:
-            await callback.message.answer("Ошибка выбора категории.")
+                await callback.message.answer(f"😔 В категории {selected_category} пока нет товаров.")
 
-    await callback.answer()
-
-async def on_startup(bot: Bot) -> None:
-    webhook_url = os.getenv("RENDER_EXTERNAL_URL") + WEBHOOK_PATH
-    await bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET)
-
-async def on_shutdown(bot: Bot) -> None:
-    await bot.delete_webhook()
-
-app = web.Application()
-app.router.add_webhook(path=WEBHOOK_PATH, dispatcher=dp, bot=bot, secret_token=WEBHOOK_SECRET)
+# Запуск бота через polling
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    web.run_app(
-        app,
-        host=WEBAPP_HOST,
-        port=WEBAPP_PORT,
-        startup=on_startup,
-        shutdown=on_shutdown
-    )
+    asyncio.run(main())
+
 
