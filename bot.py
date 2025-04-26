@@ -1,4 +1,6 @@
 import asyncio
+import os
+import json
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton)
@@ -16,10 +18,10 @@ bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# Подключение к Google Sheets
-CREDENTIALS_FILE = 'honestalmatybot-b81f425fb588.json'
+# Подключение к Google Sheets через переменную окружения
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+google_credentials = json.loads(os.environ['GOOGLE_CREDENTIALS_JSON'])
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(google_credentials, scope)
 gc = gspread.authorize(credentials)
 spreadsheet_id = '1nPcx56Y0FQ0Y0754BPuUp2i_zSjb1KW1N586PhsCNVY'
 sheet = gc.open_by_key(spreadsheet_id).sheet1
